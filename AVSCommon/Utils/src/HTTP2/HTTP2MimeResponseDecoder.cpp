@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2018-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License").
  * You may not use this file except in compliance with the License.
@@ -15,13 +15,15 @@
 
 #include <AVSCommon/Utils/Logger/Logger.h>
 
+#include "AVSCommon/Utils/HTTP/HttpResponseCode.h"
 #include "AVSCommon/Utils/HTTP2/HTTP2MimeResponseDecoder.h"
-#include "AVSCommon/Utils/LibcurlUtils/HttpResponseCodes.h"
 
 namespace alexaClientSDK {
 namespace avsCommon {
 namespace utils {
 namespace http2 {
+
+using namespace avsCommon::utils::http;
 
 /// String to identify log entries originating from this file.
 static const std::string TAG("HTTP2MimeResponseDecoder");

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2017-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License").
  * You may not use this file except in compliance with the License.
@@ -25,8 +25,11 @@
 #include <AVSCommon/SDKInterfaces/SingleSettingObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/SpeakerInterface.h>
 #include <AVSCommon/SDKInterfaces/SpeakerManagerObserverInterface.h>
+#include <AVSCommon/SDKInterfaces/Bluetooth/BluetoothDeviceObserverInterface.h>
 #include <AVSCommon/Utils/Threading/Executor.h>
 #include <CBLAuthDelegate/CBLAuthRequesterInterface.h>
+#include <Settings/DeviceSettingsManager.h>
+#include <Settings/SettingCallbacks.h>
 
 namespace alexaClientSDK {
 namespace sampleApp {
@@ -43,8 +46,11 @@ class UIManager
         , public avsCommon::sdkInterfaces::SingleSettingObserverInterface
         , public avsCommon::sdkInterfaces::SpeakerManagerObserverInterface
         , public avsCommon::sdkInterfaces::NotificationsObserverInterface
+        , public avsCommon::sdkInterfaces::bluetooth::BluetoothDeviceObserverInterface
         , public authorization::cblAuthDelegate::CBLAuthRequesterInterface {
 public:
+    using DeviceAttributes = avsCommon::sdkInterfaces::bluetooth::BluetoothDeviceObserverInterface::DeviceAttributes;
+
     /**
      * Constructor.
      */
@@ -89,6 +95,12 @@ public:
         avsCommon::sdkInterfaces::CapabilitiesObserverInterface::Error newError) override;
     /// }
 
+    /// @name BluetoothDeviceObserverInterface Methods
+    // @{
+    void onActiveDeviceConnected(const DeviceAttributes& deviceAttributes) override;
+    void onActiveDeviceDisconnected(const DeviceAttributes& deviceAttributes) override;
+    /// }
+
     /**
      * Prints the welcome screen.
      */
@@ -128,6 +140,23 @@ public:
      * Prints the Volume Control Options screen. This gives the user the possible volume control options.
      */
     void printVolumeControlScreen();
+
+#ifdef ENABLE_PCC
+    /**
+     * Prints the Phone Control screen. This gives the user the possible phone control options
+     */
+    void printPhoneControlScreen();
+
+    /**
+     * Prints the Call Id screen. This prompts the user to enter a caller Id.
+     */
+    void printCallerIdScreen();
+
+    /**
+     * Prints the Caller Id screen. This prompts the user to enter a caller Id.
+     */
+    void printCallIdScreen();
+#endif
 
     /**
      * Prints the ESP Control Options screen. This gives the user the possible ESP control options.
@@ -184,12 +213,37 @@ public:
      */
     void printCommsNotSupported();
 
+    /**
+     * Configure settings notifications.
+     *
+     * @param Pointer to the settings manager
+     * @return @true if it succeeds to configure the settings notifications; @c false otherwise.
+     */
+    bool configureSettingsNotifications(std::shared_ptr<settings::DeviceSettingsManager> settingsManager);
+
+    /**
+     * Prints menu for do not disturb mode.
+     */
+    void printDoNotDisturbScreen();
+
 private:
     /**
      * Prints the current state of Alexa after checking what the appropriate message to display is based on the current
      * component states. This should only be used within the internal executor.
      */
     void printState();
+
+    /**
+     * Callback function triggered when there is a notification available regarding a boolean setting.
+     *
+     * @param name The setting name that was affected.
+     * @param enable Whether the configuration is currently enabled or disabled.
+     * @param notification The type of notification.
+     */
+    void onBooleanSettingNotification(
+        const std::string& name,
+        bool enable,
+        settings::SettingNotifications notification);
 
     /**
      * Sets the failure status. If status is new and not empty, we'll print the limited mode help.
@@ -222,6 +276,9 @@ private:
 
     // String that holds a failure status message to be displayed when we are in limited mode.
     std::string m_failureStatus;
+
+    // Object that manages settings notifications.
+    std::shared_ptr<settings::SettingCallbacks<settings::DeviceSettingsManager>> m_callbacks;
 };
 
 }  // namespace sampleApp

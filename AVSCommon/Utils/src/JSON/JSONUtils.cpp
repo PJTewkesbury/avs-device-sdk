@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2017-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License").
  * You may not use this file except in compliance with the License.
@@ -132,7 +132,7 @@ bool findNode(
 
     auto iterator = jsonNode.FindMember(key);
     if (iterator == jsonNode.MemberEnd()) {
-        ACSDK_ERROR(LX("findNodeFailed").d("reason", "missingDirectChild").d("child", key));
+        ACSDK_DEBUG5(LX("findNode").d("reason", "missingDirectChild").d("child", key));
         return false;
     }
 
@@ -169,6 +169,25 @@ bool convertToValue(const rapidjson::Value& documentNode, std::string* value) {
     return true;
 }
 
+bool convertToValue(const rapidjson::Value& documentNode, uint64_t* value) {
+    if (!value) {
+        ACSDK_ERROR(LX("convertToUnsignedInt64ValueFailed").d("reason", "nullValue"));
+        return false;
+    }
+
+    if (!documentNode.IsUint64()) {
+        ACSDK_ERROR(LX("convertToUnsignedInt64ValueFailed")
+                        .d("reason", "invalidValue")
+                        .d("expectedValue", "Uint64")
+                        .d("type", documentNode.GetType()));
+        return false;
+    }
+
+    *value = documentNode.GetUint64();
+
+    return true;
+}
+
 bool convertToValue(const rapidjson::Value& documentNode, int64_t* value) {
     if (!value) {
         ACSDK_ERROR(LX("convertToInt64ValueFailed").d("reason", "nullValue"));
@@ -176,7 +195,11 @@ bool convertToValue(const rapidjson::Value& documentNode, int64_t* value) {
     }
 
     if (!documentNode.IsInt64()) {
-        ACSDK_ERROR(LX("convertToInt64ValueFailed").d("reason", "invalidValue").d("expectedValue", "Int64"));
+        ACSDK_ERROR(LX("convertToInt64ValueFailed")
+                        .d("reason", "invalidValue")
+                        .d("expectedValue", "Int64")
+                        .d("type", documentNode.GetType()));
+
         return false;
     }
 
@@ -192,7 +215,10 @@ bool convertToValue(const rapidjson::Value& documentNode, bool* value) {
     }
 
     if (!documentNode.IsBool()) {
-        ACSDK_ERROR(LX("convertToBoolValueFailed").d("reason", "invalidValue").d("expectedValue", "Bool"));
+        ACSDK_ERROR(LX("convertToBoolValueFailed")
+                        .d("reason", "invalidValue")
+                        .d("expectedValue", "Bool")
+                        .d("type", documentNode.GetType()));
         return false;
     }
 

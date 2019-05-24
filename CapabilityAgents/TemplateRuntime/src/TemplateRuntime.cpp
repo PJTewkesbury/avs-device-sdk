@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2017-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License").
  * You may not use this file except in compliance with the License.
@@ -155,11 +155,16 @@ bool TemplateRuntime::initialize() {
 
 void TemplateRuntime::handleDirectiveImmediately(std::shared_ptr<AVSDirective> directive) {
     ACSDK_DEBUG5(LX("handleDirectiveImmediately"));
-    preHandleDirective(std::make_shared<DirectiveInfo>(directive, nullptr));
+    handleDirective(std::make_shared<DirectiveInfo>(directive, nullptr));
 }
 
 void TemplateRuntime::preHandleDirective(std::shared_ptr<DirectiveInfo> info) {
     ACSDK_DEBUG5(LX("preHandleDirective"));
+    // do nothing.
+}
+
+void TemplateRuntime::handleDirective(std::shared_ptr<DirectiveInfo> info) {
+    ACSDK_DEBUG5(LX("handleDirective"));
     if (!info || !info->directive) {
         ACSDK_ERROR(LX("preHandleDirectiveFailed").d("reason", "nullDirectiveInfo"));
         return;
@@ -173,11 +178,6 @@ void TemplateRuntime::preHandleDirective(std::shared_ptr<DirectiveInfo> info) {
     }
 }
 
-void TemplateRuntime::handleDirective(std::shared_ptr<DirectiveInfo> info) {
-    ACSDK_DEBUG5(LX("handleDirective"));
-    // Do nothing here as directives are handled in the preHandle stage.
-}
-
 void TemplateRuntime::cancelDirective(std::shared_ptr<DirectiveInfo> info) {
     removeDirective(info);
 }
@@ -185,8 +185,10 @@ void TemplateRuntime::cancelDirective(std::shared_ptr<DirectiveInfo> info) {
 DirectiveHandlerConfiguration TemplateRuntime::getConfiguration() const {
     ACSDK_DEBUG5(LX("getConfiguration"));
     DirectiveHandlerConfiguration configuration;
-    configuration[TEMPLATE] = BlockingPolicy::HANDLE_IMMEDIATELY;
-    configuration[PLAYER_INFO] = BlockingPolicy::HANDLE_IMMEDIATELY;
+    auto visualNonBlockingPolicy = BlockingPolicy(BlockingPolicy::MEDIUM_VISUAL, false);
+
+    configuration[TEMPLATE] = visualNonBlockingPolicy;
+    configuration[PLAYER_INFO] = visualNonBlockingPolicy;
     return configuration;
 }
 
@@ -206,10 +208,14 @@ void TemplateRuntime::onDialogUXStateChanged(
     avsCommon::sdkInterfaces::DialogUXStateObserverInterface::DialogUXState newState) {
     ACSDK_DEBUG5(LX("onDialogUXStateChanged").d("state", newState));
     m_executor.submit([this, newState]() {
-        if (avsCommon::sdkInterfaces::DialogUXStateObserverInterface::DialogUXState::IDLE == newState &&
-            TemplateRuntime::State::DISPLAYING == m_state) {
-            if (m_lastDisplayedDirective && m_lastDisplayedDirective->directive->getName() == RENDER_TEMPLATE) {
+        if (TemplateRuntime::State::DISPLAYING == m_state && m_lastDisplayedDirective &&
+            m_lastDisplayedDirective->directive->getName() == RENDER_TEMPLATE) {
+            if (avsCommon::sdkInterfaces::DialogUXStateObserverInterface::DialogUXState::IDLE == newState) {
                 executeStartTimer(m_ttsFinishedTimeout);
+            } else if (
+                avsCommon::sdkInterfaces::DialogUXStateObserverInterface::DialogUXState::EXPECTING == newState ||
+                avsCommon::sdkInterfaces::DialogUXStateObserverInterface::DialogUXState::SPEAKING == newState) {
+                executeStopTimer();
             }
         }
     });
@@ -444,6 +450,11 @@ void TemplateRuntime::executeAudioPlayerInfoUpdates(avsCommon::avs::PlayerActivi
             executeAudioPlayerStartTimer(state);
         }
         executeDisplayCardEvent(m_audioItemInExecution.directive);
+    } else {
+        // The RenderTemplateCard is cleared before it's displayed, so we should release the focus.
+        if (TemplateRuntime::State::ACQUIRING == m_state) {
+            m_state = TemplateRuntime::State::RELEASING;
+        }
     }
 }
 
@@ -459,12 +470,18 @@ void TemplateRuntime::executeAudioPlayerStartTimer(avsCommon::avs::PlayerActivit
 
 void TemplateRuntime::executeRenderPlayerInfoCallbacks(bool isClearCard) {
     ACSDK_DEBUG3(LX("executeRenderPlayerInfoCallbacks").d("isClearCard", isClearCard ? "True" : "False"));
-    for (auto& observer : m_observers) {
-        if (isClearCard) {
+    if (isClearCard) {
+        for (auto& observer : m_observers) {
             observer->clearPlayerInfoCard();
-        } else {
-            observer->renderPlayerInfoCard(
-                m_audioItemInExecution.directive->directive->getPayload(), m_audioPlayerInfo, m_focus);
+        }
+    } else {
+        if (!m_audioItemInExecution.directive) {
+            ACSDK_ERROR(LX("executeRenderPlayerInfoCallbacksFao;ed").d("reason", "nullAudioItemInExecution"));
+            return;
+        }
+        auto payload = m_audioItemInExecution.directive->directive->getPayload();
+        for (auto& observer : m_observers) {
+            observer->renderPlayerInfoCard(payload, m_audioPlayerInfo, m_focus);
         }
     }
 }
@@ -641,7 +658,8 @@ void TemplateRuntime::executeOnFocusChangedEvent(avsCommon::avs::FocusState newF
             switch (newFocus) {
                 case FocusState::FOREGROUND:
                 case FocusState::BACKGROUND:
-                    weirdFocusState = true;
+                    m_focusManager->releaseChannel(CHANNEL_NAME, shared_from_this());
+                    nextState = TemplateRuntime::State::RELEASING;
                     break;
                 case FocusState::NONE:
                     nextState = TemplateRuntime::State::IDLE;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2017-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License").
  * You may not use this file except in compliance with the License.
@@ -43,16 +43,17 @@
 #include <AVSCommon/SDKInterfaces/CapabilitiesDelegateInterface.h>
 #include <AVSCommon/SDKInterfaces/CapabilitiesObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/DialogUXStateObserverInterface.h>
+#include <AVSCommon/SDKInterfaces/InternetConnectionMonitorInterface.h>
 #include <AVSCommon/SDKInterfaces/SingleSettingObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/TemplateRuntimeObserverInterface.h>
 #include <AVSCommon/Utils/DeviceInfo.h>
 #include <AVSCommon/Utils/LibcurlUtils/HTTPContentFetcherFactory.h>
 #include <AVSCommon/Utils/MediaPlayer/MediaPlayerInterface.h>
-#include <AVSCommon/Utils/Network/InternetConnectionMonitor.h>
 #include <Bluetooth/Bluetooth.h>
 #include <Bluetooth/BluetoothStorageInterface.h>
 #include <CertifiedSender/CertifiedSender.h>
 #include <CertifiedSender/SQLiteMessageStorage.h>
+#include <DoNotDisturbCA/DoNotDisturbCapabilityAgent.h>
 #include <Equalizer/EqualizerCapabilityAgent.h>
 #include <EqualizerImplementations/EqualizerController.h>
 #include <ExternalMediaPlayer/ExternalMediaPlayer.h>
@@ -60,9 +61,21 @@
 #include <MRM/MRMCapabilityAgent.h>
 #include <Notifications/NotificationsCapabilityAgent.h>
 #include <Notifications/NotificationRenderer.h>
+
+#ifdef ENABLE_PCC
+#include <AVSCommon/SDKInterfaces/Phone/PhoneCallerInterface.h>
+#include <PhoneCallController/PhoneCallController.h>
+#endif
+
+#ifdef ENABLE_COMMS_AUDIO_PROXY
+#include <CallManager/CallAudioDeviceProxy.h>
+#endif
+
 #include <PlaybackController/PlaybackController.h>
 #include <PlaybackController/PlaybackRouter.h>
 #include <RegistrationManager/RegistrationManager.h>
+#include <Settings/DeviceSettingsManager.h>
+#include <Settings/Storage/DeviceSettingStorageInterface.h>
 #include <Settings/Settings.h>
 #include <Settings/SettingsStorageInterface.h>
 #include <Settings/SettingsUpdatedEventSender.h>
@@ -106,9 +119,9 @@ public:
      * @param speakMediaPlayer The media player to use to play Alexa speech from.
      * @param audioMediaPlayer The media player to use to play Alexa audio content from.
      * @param alertsMediaPlayer The media player to use to play alerts from.
-     * @param notificationsMediaPlayer The media player to to play notification indicators.
-     * @param bluetoothMediaPlayer The media player to to play bluetooth content.
-     * @param ringtoneMediaPlayer The media player to to play Comms ringtones.
+     * @param notificationsMediaPlayer The media player to play notification indicators.
+     * @param bluetoothMediaPlayer The media player to play bluetooth content.
+     * @param ringtoneMediaPlayer The media player to play Comms ringtones.
      * @param speakSpeaker The speaker to control volume of Alexa speech.
      * @param audioSpeaker The speaker to control volume of Alexa audio content.
      * @param alertsSpeaker The speaker to control volume of alerts.
@@ -116,13 +129,19 @@ public:
      * @param bluetoothSpeaker The speaker to control volume of bluetooth.
      * @param ringtoneSpeaker The speaker to control volume of Comms ringtones.
      * @param additionalSpeakers A list of additional speakers to receive volume changes.
+#ifdef ENABLE_COMMS_AUDIO_PROXY
+     * @param commsMediaPlayer The media player to play Comms calling audio.
+     * @param commsSpeaker The speaker to control volume of Comms calling audio.
+     * @param sharedDataStream The stream to use which has the audio from microphone.
+#endif
      * @param equalizerRuntimeSetup Equalizer component runtime setup
      * @param audioFactory The audioFactory is a component that provides unique audio streams.
      * @param authDelegate The component that provides the client with valid LWA authorization.
      * @param alertStorage The storage interface that will be used to store alerts.
      * @param messageStorage The storage interface that will be used to store certified sender messages.
      * @param notificationsStorage The storage interface that will be used to store notification indicators.
-     * @param settingsStorage The storage interface that will be used to store settings.
+     * @param settingsStorage The storage interface that will be used to store settings (DEPRECATED).
+     * @param deviceSettingStorage The storage interface that will be used to store device settings.
      * @param bluetoothStorage The storage interface that will be used to store bluetooth data.
      * @param alexaDialogStateObservers Observers that can be used to be notified of Alexa dialog related UX state
      * changes.
@@ -161,6 +180,15 @@ public:
         std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> bluetoothSpeaker,
         std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> ringtoneSpeaker,
         const std::vector<std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface>>& additionalSpeakers,
+#ifdef ENABLE_PCC
+        std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> phoneSpeaker,
+        std::shared_ptr<avsCommon::sdkInterfaces::phone::PhoneCallerInterface> phoneCaller,
+#endif
+#ifdef ENABLE_COMMS_AUDIO_PROXY
+        std::shared_ptr<avsCommon::utils::mediaPlayer::MediaPlayerInterface> commsMediaPlayer,
+        std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> commsSpeaker,
+        std::shared_ptr<alexaClientSDK::avsCommon::avs::AudioInputStream> sharedDataStream,
+#endif
         std::shared_ptr<EqualizerRuntimeSetup> equalizerRuntimeSetup,
         std::shared_ptr<avsCommon::sdkInterfaces::audio::AudioFactoryInterface> audioFactory,
         std::shared_ptr<avsCommon::sdkInterfaces::AuthDelegateInterface> authDelegate,
@@ -168,12 +196,13 @@ public:
         std::shared_ptr<certifiedSender::MessageStorageInterface> messageStorage,
         std::shared_ptr<capabilityAgents::notifications::NotificationsStorageInterface> notificationsStorage,
         std::shared_ptr<capabilityAgents::settings::SettingsStorageInterface> settingsStorage,
+        std::unique_ptr<settings::storage::DeviceSettingStorageInterface> deviceSettingStorage,
         std::shared_ptr<capabilityAgents::bluetooth::BluetoothStorageInterface> bluetoothStorage,
         std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::DialogUXStateObserverInterface>>
             alexaDialogStateObservers,
         std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::ConnectionStatusObserverInterface>>
             connectionObservers,
-        std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> internetConnectionMonitor,
+        std::shared_ptr<avsCommon::sdkInterfaces::InternetConnectionMonitorInterface> internetConnectionMonitor,
         bool isGuiSupported,
         std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface> capabilitiesDelegate,
         std::shared_ptr<avsCommon::sdkInterfaces::ContextManagerInterface> contextManager,
@@ -182,8 +211,9 @@ public:
             avsCommon::sdkInterfaces::softwareInfo::INVALID_FIRMWARE_VERSION,
         bool sendSoftwareInfoOnConnected = false,
         std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver =
+            nullptr,
+        std::unique_ptr<avsCommon::sdkInterfaces::bluetooth::BluetoothDeviceManagerInterface> bluetoothDeviceManager =
             nullptr);
-
     /// @name CapabilitiesObserverInterface Methods
     /// @{
     void onCapabilitiesStateChange(
@@ -217,6 +247,12 @@ public:
     void stopForegroundActivity();
 
     /**
+     * This function provides a way for application code to request this object stop any active alert as the result
+     * of a user action, such as pressing a physical 'stop' button on the device.
+     */
+    void localStopActiveAlert();
+
+    /**
      * Adds an observer to be notified of Alexa dialog related UX state.
      *
      * @param observer The observer to add.
@@ -235,6 +271,20 @@ public:
      */
     void removeAlexaDialogStateObserver(
         std::shared_ptr<avsCommon::sdkInterfaces::DialogUXStateObserverInterface> observer);
+
+    /**
+     * Adds an observer to be notified when a message arrives from AVS.
+     *
+     * @param observer The observer to add.
+     */
+    void addMessageObserver(std::shared_ptr<avsCommon::sdkInterfaces::MessageObserverInterface> observer);
+
+    /**
+     * Removes an observer to be notified when a message arrives from AVS.
+     *
+     * @param observer The observer to remove.
+     */
+    void removeMessageObserver(std::shared_ptr<avsCommon::sdkInterfaces::MessageObserverInterface> observer);
 
     /**
      * Adds an observer to be notified of connection status changes.
@@ -367,6 +417,22 @@ public:
      */
     void removeExternalMediaPlayerObserver(
         std::shared_ptr<avsCommon::sdkInterfaces::externalMediaPlayer::ExternalMediaPlayerObserverInterface> observer);
+
+    /**
+     * Adds an observer to be notified of bluetooth device changes.
+     *
+     * @param observer The @c BluetoothDeviceObserverInterface to add.
+     */
+    void addBluetoothDeviceObserver(
+        std::shared_ptr<avsCommon::sdkInterfaces::bluetooth::BluetoothDeviceObserverInterface> observer);
+
+    /**
+     * Removes an observer to be notified of bluetooth device changes.
+     *
+     * @param observer The @c BluetoothDeviceObserverInterface to remove.
+     */
+    void removeBluetoothDeviceObserver(
+        std::shared_ptr<avsCommon::sdkInterfaces::bluetooth::BluetoothDeviceObserverInterface> observer);
 
     /**
      * Calls the changeSetting function of Settings object.
@@ -519,6 +585,27 @@ public:
     std::future<bool> notifyOfTapToTalkEnd();
 
     /**
+     * Retrieves the device settings manager which can be used to access device settings.
+     *
+     * @return Pointer to the device settings manager.
+     */
+    std::shared_ptr<settings::DeviceSettingsManager> getSettingsManager();
+
+    /**
+     * Adds an observer to be notified when the call state has changed.
+     *
+     * @param observer The observer to add.
+     */
+    void addCallStateObserver(std::shared_ptr<avsCommon::sdkInterfaces::CallStateObserverInterface> observer);
+
+    /**
+     * Removes an observer to be notified when the call state has changed.
+     *
+     * @param observer The observer to remove.
+     */
+    void removeCallStateObserver(std::shared_ptr<avsCommon::sdkInterfaces::CallStateObserverInterface> observer);
+
+    /**
      * Lets the caller know if Comms is enabled.
      *
      * @return True if comms is enabled.
@@ -556,9 +643,9 @@ private:
      * @param speakMediaPlayer The media player to use to play Alexa speech from.
      * @param audioMediaPlayer The media player to use to play Alexa audio content from.
      * @param alertsMediaPlayer The media player to use to play alerts from.
-     * @param notificationsMediaPlayer The media player to to play notification indicators.
-     * @param bluetoothMediaPlayer The media player to to play bluetooth content.
-     * @param ringtoneMediaPlayer The media player to to play Comms ringtones.
+     * @param notificationsMediaPlayer The media player to play notification indicators.
+     * @param bluetoothMediaPlayer The media player to play bluetooth content.
+     * @param ringtoneMediaPlayer The media player to play Comms ringtones.
      * @param speakSpeaker The speaker to control volume of Alexa speech.
      * @param audioSpeaker The speaker to control volume of Alexa audio content.
      * @param alertsSpeaker The speaker to control volume of alerts.
@@ -572,7 +659,8 @@ private:
      * @param alertStorage The storage interface that will be used to store alerts.
      * @param messageStorage The storage interface that will be used to store certified sender messages.
      * @param notificationsStorage The storage interface that will be used to store notification indicators.
-     * @param settingsStorage The storage interface that will be used to store settings.
+     * @param settingsStorage The storage interface that will be used to store settings (DEPRECATED).
+     * @param deviceSettingsStorage The storage interface that will be used to store device settings.
      * @param bluetoothStorage The storage interface that will be used to store bluetooth data.
      * @param alexaDialogStateObservers Observers that can be used to be notified of Alexa dialog related UX state
      * changes.
@@ -609,6 +697,15 @@ private:
         std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> bluetoothSpeaker,
         std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> ringtoneSpeaker,
         const std::vector<std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface>>& additionalSpeakers,
+#ifdef ENABLE_PCC
+        std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> phoneSpeaker,
+        std::shared_ptr<avsCommon::sdkInterfaces::phone::PhoneCallerInterface> phoneCaller,
+#endif
+#ifdef ENABLE_COMMS_AUDIO_PROXY
+        std::shared_ptr<avsCommon::utils::mediaPlayer::MediaPlayerInterface> commsMediaPlayer,
+        std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface> commsSpeaker,
+        std::shared_ptr<alexaClientSDK::avsCommon::avs::AudioInputStream> sharedDataStream,
+#endif
         std::shared_ptr<EqualizerRuntimeSetup> equalizerRuntimeSetup,
         std::shared_ptr<avsCommon::sdkInterfaces::audio::AudioFactoryInterface> audioFactory,
         std::shared_ptr<avsCommon::sdkInterfaces::AuthDelegateInterface> authDelegate,
@@ -616,19 +713,21 @@ private:
         std::shared_ptr<certifiedSender::MessageStorageInterface> messageStorage,
         std::shared_ptr<capabilityAgents::notifications::NotificationsStorageInterface> notificationsStorage,
         std::shared_ptr<capabilityAgents::settings::SettingsStorageInterface> settingsStorage,
+        std::shared_ptr<settings::storage::DeviceSettingStorageInterface> deviceSettingStorage,
         std::shared_ptr<capabilityAgents::bluetooth::BluetoothStorageInterface> bluetoothStorage,
         std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::DialogUXStateObserverInterface>>
             alexaDialogStateObservers,
         std::unordered_set<std::shared_ptr<avsCommon::sdkInterfaces::ConnectionStatusObserverInterface>>
             connectionObservers,
-        std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> internetConnectionMonitor,
+        std::shared_ptr<avsCommon::sdkInterfaces::InternetConnectionMonitorInterface> internetConnectionMonitor,
         bool isGuiSupported,
         std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface> capabilitiesDelegate,
         std::shared_ptr<avsCommon::sdkInterfaces::ContextManagerInterface> contextManager,
         std::shared_ptr<alexaClientSDK::acl::TransportFactoryInterface> transportFactory,
         avsCommon::sdkInterfaces::softwareInfo::FirmwareVersion firmwareVersion,
         bool sendSoftwareInfoOnConnected,
-        std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver);
+        std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver,
+        std::unique_ptr<avsCommon::sdkInterfaces::bluetooth::BluetoothDeviceManagerInterface> bluetoothDeviceManager);
 
     /// The directive sequencer.
     std::shared_ptr<avsCommon::sdkInterfaces::DirectiveSequencerInterface> m_directiveSequencer;
@@ -651,7 +750,7 @@ private:
     /// The connection manager.
     std::shared_ptr<acl::AVSConnectionManager> m_connectionManager;
 
-    std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> m_internetConnectionMonitor;
+    std::shared_ptr<avsCommon::sdkInterfaces::InternetConnectionMonitorInterface> m_internetConnectionMonitor;
 
     /// The exception sender.
     std::shared_ptr<avsCommon::avs::ExceptionEncounteredSender> m_exceptionSender;
@@ -680,11 +779,19 @@ private:
     /// The interaction model capability agent.
     std::shared_ptr<capabilityAgents::interactionModel::InteractionModelCapabilityAgent> m_interactionCapabilityAgent;
 
+    /// The notifications renderer.
+    std::shared_ptr<capabilityAgents::notifications::NotificationRenderer> m_notificationsRenderer;
+
     /// The notifications capability agent.
     std::shared_ptr<capabilityAgents::notifications::NotificationsCapabilityAgent> m_notificationsCapabilityAgent;
 
     /// The user inactivity monitor.
     std::shared_ptr<capabilityAgents::system::UserInactivityMonitor> m_userInactivityMonitor;
+
+#ifdef ENABLE_PCC
+    /// The phoneCallController capability agent.
+    std::shared_ptr<capabilityAgents::phoneCallController::PhoneCallController> m_phoneCallControllerCapabilityAgent;
+#endif
 
     /// The call manager capability agent.
     std::shared_ptr<avsCommon::sdkInterfaces::CallManagerInterface> m_callManager;
@@ -710,6 +817,9 @@ private:
     /// The MRM capability agent.
     std::shared_ptr<capabilityAgents::mrm::MRMCapabilityAgent> m_mrmCapabilityAgent;
 
+    /// The DoNotDisturb capability agent.
+    std::shared_ptr<capabilityAgents::doNotDisturb::DoNotDisturbCapabilityAgent> m_dndCapabilityAgent;
+
     /// The Equalizer capability agent.
     std::shared_ptr<capabilityAgents::equalizer::EqualizerCapabilityAgent> m_equalizerCapabilityAgent;
 
@@ -732,6 +842,17 @@ private:
 
     /// The RegistrationManager used to control customer registration.
     std::shared_ptr<registrationManager::RegistrationManager> m_registrationManager;
+
+    /// Module responsible for managing device settings.
+    std::shared_ptr<settings::DeviceSettingsManager> m_deviceSettingsManager;
+
+    /// Settings storage. This storage needs to be closed during default client destruction.
+    std::shared_ptr<alexaClientSDK::settings::storage::DeviceSettingStorageInterface> m_deviceSettingStorage;
+
+#ifdef ENABLE_COMMS_AUDIO_PROXY
+    /// The CallAudioDeviceProxy used to work with audio proxy audio driver of CommsLib.
+    std::shared_ptr<capabilityAgents::callManager::CallAudioDeviceProxy> m_callAudioDeviceProxy;
+#endif
 };
 
 }  // namespace defaultClient
